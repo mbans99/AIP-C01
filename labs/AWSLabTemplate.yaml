@@ -1,0 +1,457 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: AWS SAA Lab Foundation Stack
+
+Parameters:
+
+  VpcCidr:
+    Type: String
+    Default: 10.2.0.0/16
+
+  PublicSubnetCidr1:
+    Type: String
+    Default: 10.2.1.0/24
+
+  PublicSubnetCidr2:
+    Type: String
+    Default: 10.2.2.0/24
+
+  PrivateSubnetCidr1:
+    Type: String
+    Default: 10.2.3.0/24
+
+  PrivateSubnetCidr2:
+    Type: String
+    Default: 10.2.4.0/24
+
+  KeyPairName:
+    Type: String
+    Default: mkebill-keypair
+    Description: Name of an existing EC2 key pair
+
+Resources:
+
+# ----------------------------------
+# VPC
+# ----------------------------------
+
+  LabVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+# ----------------------------------
+# Internet Gateway
+# ----------------------------------
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Attaches the internet gateway to the lab VPC so public resources can access the internet."
+        trust:
+          src: infer
+          conf: low
+          note: "rationale not documented"
+    Properties:
+      VpcId: !Ref LabVPC
+      InternetGatewayId: !Ref InternetGateway
+
+# ----------------------------------
+# Public Subnets
+# ----------------------------------
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref LabVPC
+      CidrBlock: !Ref PublicSubnetCidr1
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref LabVPC
+      CidrBlock: !Ref PublicSubnetCidr2
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-2"
+
+# ----------------------------------
+# Private Subnet
+# ----------------------------------
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref LabVPC
+      CidrBlock: !Ref PrivateSubnetCidr1
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref LabVPC
+      CidrBlock: !Ref PrivateSubnetCidr2
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet-2"
+
+# ----------------------------------
+# Public Route Table
+# ----------------------------------
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref LabVPC
+
+# Public Default Route
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+# Public Subnet Associations
+  PublicSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+# ----------------------------------
+# Elastic IP for NAT
+# ----------------------------------
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+
+# ----------------------------------
+# NAT Gateway
+# ----------------------------------
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+# ----------------------------------
+# Private Route Table
+# ----------------------------------
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref LabVPC
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+# ----------------------------------
+# Security Group
+# ----------------------------------
+
+  LabSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lab SG
+      VpcId: !Ref LabVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          CidrIp: 0.0.0.0/0
+          FromPort: -1
+          ToPort: -1
+
+# ----------------------------------
+# IAM Role
+# ----------------------------------
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+# ----------------------------------
+# Instance Profile
+# ----------------------------------
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+# ----------------------------------
+# S3 Public Bucket
+# ----------------------------------
+
+  PublicBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-public-bucket"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+# ----------------------------------
+# S3 Private Bucket
+# ----------------------------------
+
+  PrivateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-private-bucket"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+# ----------------------------------
+# S3 Gateway Endpoint
+# ----------------------------------
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref LabVPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+      VpcEndpointType: Gateway
+
+# ----------------------------------
+# Public EC2
+# ----------------------------------
+
+  PublicSubnet1EC21:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0d27e0fb3bac4d724
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref LabSecurityGroup
+      SubnetId: !Ref PublicSubnet1
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd
+        systemctl enable httpd
+        echo "Hello from public EC2 instance 1" > /var/www/html/index.html
+        systemctl start httpd      
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet1-ec2-1"
+
+  PublicSubnet2EC22:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0d27e0fb3bac4d724
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref LabSecurityGroup
+      SubnetId: !Ref PublicSubnet2
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd
+        systemctl enable httpd
+        echo "Hello from public EC2 instance 2" > /var/www/html/index.html
+        systemctl start httpd             
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet2-ec2-2"
+
+# ----------------------------------
+# Private EC2
+# ----------------------------------
+
+  PrivateSubnet1EC21:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0d27e0fb3bac4d724
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref LabSecurityGroup
+      SubnetId: !Ref PrivateSubnet1
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd
+        systemctl enable httpd
+        echo "Hello from private EC2 instance 1" > /var/www/html/index.html
+        systemctl start httpd       
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet1-ec2-1"
+
+  PrivateSubnet2EC22:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0d27e0fb3bac4d724
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref LabSecurityGroup
+      SubnetId: !Ref PrivateSubnet2
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd
+        systemctl enable httpd
+        echo "Hello from private EC2 instance 2" > /var/www/html/index.html
+        systemctl start httpd        
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet2-ec2-2"
+
+Outputs:
+
+  VpcId:
+    Value: !Ref LabVPC
+
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+
+  SecurityGroupId:
+    Value: !Ref LabSecurityGroup
+    
+  PublicInstance1:
+    Value: !Ref PublicSubnet1EC21
+    Description: Public EC2 instance in the first public subnet.
+
+  PublicInstance1PublicIP:
+    Description: Public IP of Public EC2 #1
+    Value: !GetAtt PublicSubnet1EC21.PublicIp
+
+  PublicInstance2:
+    Value: !Ref PublicSubnet2EC22
+    Description: Public EC2 instance in the second public subnet.
+  
+  PublicInstance2PublicIP:
+    Description: Public IP of Public EC2 #2
+    Value: !GetAtt PublicSubnet2EC22.PublicIp
+  
+  PublicInstance1PrivateIP:
+    Description: Private IP of Public EC2 #1
+    Value: !GetAtt PublicSubnet1EC21.PrivateIp
+
+  PublicInstance2PrivateIP:
+    Description: Private IP of Public EC2 #2
+    Value: !GetAtt PublicSubnet2EC22.PrivateIp
+  
+  PrivateInstance1PrivateIP:
+    Description: Private IP of Private EC2 #1
+    Value: !GetAtt PrivateSubnet1EC21.PrivateIp
+
+  PrivateInstance2PrivateIP:
+    Description: Private IP of Private EC2 #2
+    Value: !GetAtt PrivateSubnet2EC22.PrivateIp
+
+  PrivateInstance1:
+    Value: !Ref PrivateSubnet1EC21
+    Description: Private EC2 instance in the first private subnet.
+
+  PrivateInstance2:
+    Value: !Ref PrivateSubnet2EC22
+    Description: Private EC2 instance in the second private subnet.
+
+  PublicBucketName:
+    Value: !Ref PublicBucket
+
+  PrivateBucketName:
+    Value: !Ref PrivateBucket
+  
